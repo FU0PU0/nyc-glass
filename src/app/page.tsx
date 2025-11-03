@@ -7,6 +7,178 @@ import HUDTooltip, { HoverInfo } from "@/components/ui/HUDTooltip";
 
 
 // 人口密度小叉叉符號組件（參考曼哈頓人口密度分布）
+// 融球動畫組件
+function WindowBlobs({ colors, index }: { colors: string[]; index: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationRef = useRef<number | undefined>(undefined);
+  const blobsRef = useRef<Array<{
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    radius: number;
+    color: string;
+  }>>([]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || colors.length === 0) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width = 120;
+    canvas.height = 120;
+    
+    console.log(`WindowBlobs ${index}: initializing with colors:`, colors); // Debug
+
+    // 初始化融球 - 使用seeded random確保一致性
+    const seed = index * 1000 + 12345;
+    let seedValue = seed;
+    const random = () => {
+      seedValue = (seedValue * 9301 + 49297) % 233280;
+      return seedValue / 233280;
+    };
+    
+    const blobs = colors.map((color, i) => {
+      const angle = (i / colors.length) * Math.PI * 2;
+      const radius = 15 + random() * 10;
+      return {
+        x: 60 + Math.cos(angle) * 20,
+        y: 60 + Math.sin(angle) * 20,
+        vx: (random() - 0.5) * 0.3,
+        vy: (random() - 0.5) * 0.3,
+        radius,
+        color,
+      };
+    });
+    blobsRef.current = blobs;
+
+    // 檢查點是否在四葉草形狀內（簡化為圓形檢測）
+    const isInsideQuatrefoil = (x: number, y: number): boolean => {
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const dist = Math.hypot(x - centerX, y - centerY);
+      return dist < 35;
+    };
+
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // 設置裁剪區域（四葉草形狀 - 簡化為圓形）
+      ctx.save();
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 35, 0, Math.PI * 2);
+      ctx.clip();
+
+      blobs.forEach((blob) => {
+        // 更新位置
+        blob.x += blob.vx;
+        blob.y += blob.vy;
+
+        // 限制在四葉草形狀內
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const dist = Math.hypot(blob.x - centerX, blob.y - centerY);
+        const maxDist = 35;
+
+        if (!isInsideQuatrefoil(blob.x, blob.y) || dist + blob.radius > maxDist) {
+          const angle = Math.atan2(blob.y - centerY, blob.x - centerX);
+          blob.x = centerX + Math.cos(angle) * (maxDist - blob.radius - 2);
+          blob.y = centerY + Math.sin(angle) * (maxDist - blob.radius - 2);
+          // 反彈速度
+          const dot = blob.vx * Math.cos(angle) + blob.vy * Math.sin(angle);
+          blob.vx -= 1.5 * dot * Math.cos(angle);
+          blob.vy -= 1.5 * dot * Math.sin(angle);
+          // 阻尼
+          blob.vx *= 0.95;
+          blob.vy *= 0.95;
+        }
+
+        // 繪製融球效果
+        const gradient = ctx.createRadialGradient(
+          blob.x, blob.y, 0,
+          blob.x, blob.y, blob.radius
+        );
+        gradient.addColorStop(0, blob.color);
+        gradient.addColorStop(0.7, blob.color + "80");
+        gradient.addColorStop(1, blob.color + "00");
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(blob.x, blob.y, blob.radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // 處理融球之間的融合
+      for (let i = 0; i < blobs.length; i++) {
+        for (let j = i + 1; j < blobs.length; j++) {
+          const b1 = blobs[i];
+          const b2 = blobs[j];
+          const dx = b2.x - b1.x;
+          const dy = b2.y - b1.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = b1.radius + b2.radius;
+          const mergeDist = minDist * 1.5; // 融合距離
+
+          if (dist < mergeDist && dist > 0) {
+            // 融合效果：繪製連接（融球效果）
+            const alpha = 1 - (dist / mergeDist);
+            const gradient = ctx.createLinearGradient(b1.x, b1.y, b2.x, b2.y);
+            gradient.addColorStop(0, b1.color + Math.floor(alpha * 150).toString(16).padStart(2, "0"));
+            gradient.addColorStop(1, b2.color + Math.floor(alpha * 150).toString(16).padStart(2, "0"));
+            
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 12 * alpha;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(b1.x, b1.y);
+            ctx.lineTo(b2.x, b2.y);
+            ctx.stroke();
+
+            // 輕微彈開（不要太強）
+            if (dist < minDist) {
+              const angle = Math.atan2(dy, dx);
+              const force = (minDist - dist) * 0.02;
+              b1.vx -= Math.cos(angle) * force;
+              b1.vy -= Math.sin(angle) * force;
+              b2.vx += Math.cos(angle) * force;
+              b2.vy += Math.sin(angle) * force;
+            }
+          }
+        }
+      }
+
+      ctx.restore(); // 恢復裁剪
+      animationRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [colors, index]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
 function DensitySymbols() {
   // 參考圖片：約 163 個 'X' 符號，分布模擬曼哈頓形狀
   // 每個 'X' 代表約 10,000 人
@@ -242,6 +414,40 @@ export default function Home() {
   const [windowsSceneActive, setWindowsSceneActive] = useState(false); // 窗戶場景是否激活
   const [currentTime, setCurrentTime] = useState(7); // 當前時間（小時，7表示7:00am）
   const [shapeFadeOut, setShapeFadeOut] = useState(false); // 圖形是否淡出
+  // 窗戶圖形的顏色配置（每個圖形0-3種顏色，使用seeded random確保一致性）
+  const windowColors = useMemo(() => {
+    const colors = [
+      "#B0E0E6", // Cold light - 淡藍色
+      "#FFF8DC", // Warm light - 淡黃色
+      "#D2B48C", // See someone - 淡棕色
+      "#98FB98", // See plants - 淡綠色
+      "#E6E6FA", // TV light - 淡紫色
+    ];
+    const result: string[][] = [];
+    // 使用seeded random生成每個圖形的顏色配置
+    const seed = 12345;
+    let seedValue = seed;
+    const random = () => {
+      seedValue = (seedValue * 9301 + 49297) % 233280;
+      return seedValue / 233280;
+    };
+    for (let i = 0; i < 15; i++) {
+      // 確保至少有一些圖形有顏色（前10個至少有1-3種顏色）
+      const colorCount = i < 10 
+        ? Math.max(1, Math.floor(random() * 3) + 1) // 1-3種顏色
+        : Math.floor(random() * 4); // 0-3種顏色
+      const selected: string[] = [];
+      const available = [...colors];
+      for (let j = 0; j < colorCount; j++) {
+        const idx = Math.floor(random() * available.length);
+        selected.push(available[idx]);
+        available.splice(idx, 1);
+      }
+      result.push(selected);
+    }
+    console.log("Window colors generated:", result); // Debug
+    return result;
+  }, []);
   const reflectionLineIndexRef = useRef(-1);
   const reflectionCooldownRef = useRef(false);
   const reflectionWheelAccumRef = useRef(0);
@@ -621,6 +827,34 @@ useEffect(() => {
     return () => window.removeEventListener("wheel", onWheel as any);
   }, [windowsSceneActive]);
 
+  // 注入融球淡入動畫樣式
+  useEffect(() => {
+    const styleId = 'fadeInBlobs-animation';
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes fadeInBlobs {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    console.log("fadeInBlobs animation style injected"); // Debug
+
+    return () => {
+      const existingStyle = document.getElementById(styleId);
+      if (existingStyle) {
+        document.head.removeChild(existingStyle);
+      }
+    };
+  }, []);
+
   return (
     <div style={{ position: "relative", height: "100vh", overflow: "hidden" }}>
           <div
@@ -629,7 +863,7 @@ useEffect(() => {
               transition: "opacity 1000ms ease-out",
             }}
           >
-            <SceneCanvas>
+          <SceneCanvas>
               <QuatrefoilGrid
                 rows={ROWS}
                 cols={COLS}
@@ -647,10 +881,10 @@ useEffect(() => {
                 shapeFollowingMouse={shapeFollowingMouse && !shapeFadeOut && !transitionToWindows && !windowsSceneActive}
                 onShapeScreenPosChange={setShapeScreenPos}
               />
-            </SceneCanvas>
+          </SceneCanvas>
           </div>
       <HUDTooltip hoverInfo={hoverInfo} />
-      {/* 網頁標題：只在非 reflection 階段顯示，reflection 階段保留，窗戶場景淡出 */}
+      {/* 網頁標題：只在非 reflection 階段顯示，reflection 階段保留，窗戶場景也保留 */}
       <div
         style={{
           position: "absolute",
@@ -658,12 +892,8 @@ useEffect(() => {
           left: 24,
           pointerEvents: "none",
           userSelect: "none",
-          opacity: windowsSceneActive 
-            ? 0 
-            : (showTitle && phase !== 'reflection' ? 1 : phase === 'reflection' ? 1 : 0),
-          transition: windowsSceneActive 
-            ? "opacity 1000ms ease-out"
-            : (phase === 'reflection' ? "none" : "opacity 0.8s ease-in"),
+          opacity: (showTitle && phase !== 'reflection') || phase === 'reflection' || windowsSceneActive ? 1 : 0,
+          transition: phase === 'reflection' ? "none" : "opacity 0.8s ease-in",
           textShadow: "0 2px 24px rgba(0,0,0,0.45)",
           zIndex: 10,
         }}
@@ -915,127 +1145,109 @@ useEffect(() => {
               </div>
             ))}
           </div>
-          {/* 小圖形 - 文字下方，使用mask顯示 */}
+          {/* 小圖形 - 文字下方，穩定顯示 */}
           <div
             style={{
               marginTop: "60px",
               width: "40px",
               height: "40px",
-              pointerEvents: "none",
+              pointerEvents: "auto",
               cursor: "pointer",
               position: "relative",
               opacity: smallShapeHover ? 1 : 0.3,
               transform: smallShapeHover ? "scale(1.15)" : "scale(1)",
               transition: "transform 300ms ease-out, opacity 300ms ease-out",
             }}
+            onClick={() => {
+              setSmallShapeClick(true);
+              setTransitionToWindows(true);
+              setTimeout(() => {
+                setWindowsSceneActive(true);
+              }, 1000);
+            }}
           >
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                pointerEvents: "auto",
-                WebkitMaskImage: (smallShapeHover && mousePx)
-                  ? (() => {
-                      // 計算小圖形在屏幕上的位置
-                      const shapeCenterX = window.innerWidth / 2;
-                      const shapeCenterY = window.innerHeight / 2 + 100;
-                      // mask相對於屏幕的位置
-                      const maskX = mousePx.x;
-                      const maskY = mousePx.y;
-                      return `radial-gradient(circle 25px at ${maskX}px ${maskY}px, black 0%, black 98%, transparent 100%)`;
-                    })()
-                  : undefined,
-                maskImage: (smallShapeHover && mousePx)
-                  ? (() => {
-                      const shapeCenterX = window.innerWidth / 2;
-                      const shapeCenterY = window.innerHeight / 2 + 100;
-                      const maskX = mousePx.x;
-                      const maskY = mousePx.y;
-                      return `radial-gradient(circle 25px at ${maskX}px ${maskY}px, black 0%, black 98%, transparent 100%)`;
-                    })()
-                  : undefined,
-                WebkitMaskSize: "100% 100%",
-                maskSize: "100% 100%",
-                opacity: smallShapeHover ? 1 : 0,
-                transition: "opacity 300ms ease-out",
-              }}
-              onClick={() => {
-                setSmallShapeClick(true);
-                setTransitionToWindows(true);
-                setTimeout(() => {
-                  setWindowsSceneActive(true);
-                }, 1000);
-              }}
+            {/* 使用SVG繪製小quatrefoil - 完全複製Quatrefoil的形狀 */}
+            <svg
+              width="40"
+              height="40"
+              viewBox="-0.4 -0.4 0.8 0.8"
+              style={{ width: "100%", height: "100%" }}
+              preserveAspectRatio="xMidYMid meet"
             >
-              {/* 使用SVG繪製小quatrefoil */}
-              <svg
-                width="40"
-                height="40"
-                viewBox="0 0 40 40"
-                style={{ width: "100%", height: "100%" }}
-              >
-                <path
-                  d="M20 8 C16 8, 12 12, 12 16 C12 20, 16 24, 20 24 C24 24, 28 20, 28 16 C28 12, 24 8, 20 8 M20 16 C18 16, 16 18, 16 20 C16 22, 18 24, 20 24 C22 24, 24 22, 24 20 C24 18, 22 16, 20 16"
-                  fill="none"
-                  stroke="#ffffff"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </div>
+              <path
+                d="M 0.2 -0.2 A 0.2 0.2 0 0 1 0.2 0.2 A 0.2 0.2 0 0 1 -0.2 0.2 A 0.2 0.2 0 0 1 -0.2 -0.2 A 0.2 0.2 0 0 1 0.2 -0.2 Z"
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="0.03"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </div>
         </div>
       )}
       {/* 窗戶場景 */}
       {windowsSceneActive && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 30,
-            opacity: windowsSceneActive ? 1 : 0,
-            transition: "opacity 1000ms ease-in",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            paddingLeft: "15%",
-            paddingRight: "80px", // 為時間軸留空間
-          }}
-        >
-          {/* 左側：12個窗戶圖形 (4x3) - 使用四葉草形狀 */}
+        <>
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 30,
+              opacity: windowsSceneActive ? 1 : 0,
+              transition: "opacity 1000ms ease-in",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              paddingLeft: "20%",
+              paddingRight: "80px", // 為時間軸留空間
+              gap: "60px",
+            }}
+          >
+        {/* 左側：15個窗戶圖形 (3x5) - 使用四葉草形狀 */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gridTemplateRows: "repeat(3, 1fr)",
-              gap: "20px",
-              width: "400px",
-              height: "300px",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gridTemplateRows: "repeat(5, 1fr)",
+              gap: "30px",
+              width: "450px",
+              height: "750px",
             }}
           >
-            {Array.from({ length: 12 }).map((_, idx) => {
+            {Array.from({ length: 15 }).map((_, idx) => {
+              const colors = windowColors[idx] || [];
+              console.log(`Window ${idx}: colors =`, colors, "length =", colors.length); // Debug
               return (
                 <div
                   key={idx}
                   style={{
-                    width: "80px",
-                    height: "80px",
+                    width: "120px",
+                    height: "120px",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     opacity: 0.6,
                     transition: "opacity 200ms ease",
+                    position: "relative",
+                    overflow: "hidden",
                   }}
                 >
                   {/* 四葉草形狀的SVG線框 - 完全複製Quatrefoil的形狀 (radius=0.4, petalRadius=0.2) */}
                   <svg
-                    width="80"
-                    height="80"
+                    width="120"
+                    height="120"
                     viewBox="-0.4 -0.4 0.8 0.8"
-                    style={{ width: "100%", height: "100%" }}
+                    style={{ width: "100%", height: "100%", position: "relative", zIndex: 2, pointerEvents: "none" }}
                     preserveAspectRatio="xMidYMid meet"
                   >
+                    <defs>
+                      <clipPath id={`quatrefoil-clip-${idx}`}>
+                        <path
+                          d="M 0.2 -0.2 A 0.2 0.2 0 0 1 0.2 0.2 A 0.2 0.2 0 0 1 -0.2 0.2 A 0.2 0.2 0 0 1 -0.2 -0.2 A 0.2 0.2 0 0 1 0.2 -0.2 Z"
+                        />
+                      </clipPath>
+                    </defs>
                     <path
                       d="M 0.2 -0.2 A 0.2 0.2 0 0 1 0.2 0.2 A 0.2 0.2 0 0 1 -0.2 0.2 A 0.2 0.2 0 0 1 -0.2 -0.2 A 0.2 0.2 0 0 1 0.2 -0.2 Z"
                       fill="none"
@@ -1045,9 +1257,200 @@ useEffect(() => {
                       strokeLinejoin="round"
                     />
                   </svg>
+                  {/* 融球動畫 - 進入畫面後漸漸浮現 */}
+                  {colors.length > 0 ? (
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        opacity: 0,
+                        animation: `fadeInBlobs 2s ease-in forwards ${idx * 0.15}s`,
+                        pointerEvents: "none",
+                        zIndex: 1,
+                      }}
+                      key={`blobs-wrapper-${idx}`}
+                    >
+                      <WindowBlobs colors={colors} index={idx} />
+                    </div>
+                  ) : null}
     </div>
   );
             })}
+          </div>
+          {/* 中間：顏色圖例 */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+              paddingTop: "40px",
+              marginLeft: "100px", // 往右移動更多
+            }}
+          >
+            {/* Cold light - 淡藍色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#B0E0E6",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                Cold light
+              </span>
+            </div>
+            {/* Warm light - 淡黃色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#FFF8DC",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                Warm light
+              </span>
+            </div>
+            {/* See someone - 淡棕色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#D2B48C",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                See someone
+              </span>
+            </div>
+            {/* See plants - 淡綠色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#98FB98",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                See plants
+              </span>
+            </div>
+            {/* TV light - 淡紫色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#E6E6FA",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                TV light
+              </span>
+            </div>
+            {/* Eye contact - 淡紅色 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: "#FFB6C1",
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  color: "#ffffff",
+                  fontSize: "14px",
+                  fontFamily: "sans-serif",
+                }}
+              >
+                Eye contact
+              </span>
+            </div>
           </div>
           {/* 右側：時間軸 - 在畫面右邊緣 */}
           <div
@@ -1144,6 +1547,7 @@ useEffect(() => {
             />
           </div>
       </div>
+        </>
       )}
     </div>
   );
